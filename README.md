@@ -1,1 +1,363 @@
-# .github-workflows-build.yml
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create project files
+        run: |
+          cat > settings.gradle <<'END_OF_FILE'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "CoachingFee"
+          include ':app'
+          END_OF_FILE
+          cat > build.gradle <<'END_OF_FILE'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          END_OF_FILE
+          cat > gradle.properties <<'END_OF_FILE'
+          org.gradle.jvmargs=-Xmx2g
+          END_OF_FILE
+          mkdir -p app
+          cat > app/build.gradle <<'END_OF_FILE'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.ajay.coachingfee'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.ajay.coachingfee"
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+          }
+          END_OF_FILE
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'END_OF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.SEND_SMS" />
+              <uses-feature android:name="android.hardware.telephony" android:required="false" />
+              <application android:label="कोचिंग फीस" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          END_OF_FILE
+          mkdir -p app/src/main/java/com/ajay/coachingfee
+          cat > app/src/main/java/com/ajay/coachingfee/MainActivity.java <<'END_OF_FILE'
+          package com.ajay.coachingfee;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.ContentValues;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.provider.MediaStore;
+          import android.util.Base64;
+          import java.io.OutputStream;
+          import android.telephony.SmsManager;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Toast;
+          import java.util.ArrayList;
+
+          public class MainActivity extends Activity {
+              private WebView wv;
+              private final ArrayList<String[]> queue = new ArrayList<>();
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  wv = new WebView(this);
+                  setContentView(wv);
+                  WebSettings s = wv.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  wv.setWebChromeClient(new WebChromeClient());
+                  wv.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView v, String url) {
+                          if (url.startsWith("file:")) return false;
+                          try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); } catch (Exception e) { }
+                          return true;
+                      }
+                  });
+                  wv.addJavascriptInterface(new Bridge(), "Android");
+                  wv.loadUrl("file:///android_asset/index.html");
+              }
+
+              class Bridge {
+                  @JavascriptInterface
+                  public void sendSms(final String phone, final String text) {
+                      runOnUiThread(new Runnable() { public void run() { doSend(phone, text); } });
+                  }
+                  @JavascriptInterface
+                  public void shareImage(final String b64, final String text) {
+                      runOnUiThread(new Runnable() { public void run() {
+                          if (Build.VERSION.SDK_INT < 29) {
+                              Toast.makeText(MainActivity.this, "फोटो शेयर के लिए Android 10 या नया चाहिए", Toast.LENGTH_LONG).show();
+                              return;
+                          }
+                          try {
+                              byte[] data = Base64.decode(b64, Base64.DEFAULT);
+                              ContentValues v = new ContentValues();
+                              v.put(MediaStore.Images.Media.DISPLAY_NAME, "receipt_" + System.currentTimeMillis() + ".png");
+                              v.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+                              v.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CoachingFee");
+                              Uri u = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+                              OutputStream os = getContentResolver().openOutputStream(u);
+                              os.write(data);
+                              os.close();
+                              Intent i = new Intent(Intent.ACTION_SEND);
+                              i.setType("image/png");
+                              i.putExtra(Intent.EXTRA_STREAM, u);
+                              i.putExtra(Intent.EXTRA_TEXT, text);
+                              i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                              startActivity(Intent.createChooser(i, "रसीद भेजें"));
+                          } catch (Exception e) {
+                              Toast.makeText(MainActivity.this, "फोटो शेयर नहीं हो पाई", Toast.LENGTH_LONG).show();
+                          }
+                      } });
+                  }
+                  @JavascriptInterface
+                  public void share(final String text) {
+                      runOnUiThread(new Runnable() { public void run() {
+                          Intent i = new Intent(Intent.ACTION_SEND);
+                          i.setType("text/plain");
+                          i.putExtra(Intent.EXTRA_TEXT, text);
+                          startActivity(Intent.createChooser(i, "फीस संदेश भेजें"));
+                      } });
+                  }
+              }
+
+              private void doSend(String phone, String text) {
+                  if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+                      queue.add(new String[]{phone, text});
+                      requestPermissions(new String[]{Manifest.permission.SEND_SMS}, 1);
+                      return;
+                  }
+                  try {
+                      SmsManager sm = Build.VERSION.SDK_INT >= 31 ? getSystemService(SmsManager.class) : SmsManager.getDefault();
+                      sm.sendMultipartTextMessage(phone, null, sm.divideMessage(text), null, null);
+                      Toast.makeText(this, "SMS भेज दिया: " + phone, Toast.LENGTH_SHORT).show();
+                  } catch (Exception e) {
+                      Toast.makeText(this, "SMS नहीं गया: " + phone, Toast.LENGTH_LONG).show();
+                  }
+              }
+
+              @Override
+              public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+                  super.onRequestPermissionsResult(code, perms, res);
+                  boolean ok = res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED;
+                  ArrayList<String[]> q = new ArrayList<>(queue);
+                  queue.clear();
+                  if (!ok) { Toast.makeText(this, "SMS की अनुमति नहीं मिली", Toast.LENGTH_LONG).show(); return; }
+                  for (String[] m : q) doSend(m[0], m[1]);
+              }
+          }
+          END_OF_FILE
+          mkdir -p app/src/main/assets
+          cat > app/src/main/assets/index.html <<'END_OF_FILE'
+          <!DOCTYPE html>
+          <html lang="hi">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+          <meta name="theme-color" content="#1F4E78">
+          <title>कोचिंग फीस</title>
+          <style>
+          :root{--bg:#f4f6f9;--card:#fff;--tx:#1b1f24;--mut:#667085;--pri:#1F4E78;--ok:#188038;--line:#dde3ea;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+          @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#12161b;--card:#1b2129;--tx:#e8ecf1;--mut:#9aa6b4;--pri:#5b9bd5;--line:#2c3540}}
+          :root[data-theme="dark"]{--bg:#12161b;--card:#1b2129;--tx:#e8ecf1;--mut:#9aa6b4;--pri:#5b9bd5;--line:#2c3540}
+          *{box-sizing:border-box}html,body{margin:0}
+          body{background:var(--bg);color:var(--tx);font:15px/1.45 Arial,"Noto Sans Devanagari",sans-serif;padding:12px 12px 90px}
+          h1{font-size:19px;margin:4px 0 10px}
+          .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+          .row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1 1 120px}
+          label{display:block;font-size:12px;color:var(--mut);margin:6px 0 2px}
+          input{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--tx);font-size:15px}
+          button{border:0;border-radius:8px;padding:10px 12px;font-size:14px;font-weight:bold;background:var(--pri);color:#fff;cursor:pointer}
+          button.g{background:transparent;color:var(--pri);border:1px solid var(--pri)}
+          button.ok{background:var(--ok)}button.r{background:#c5221f}
+          .tot{font-size:20px;font-weight:bold;color:var(--pri)}
+          .mut{color:var(--mut);font-size:13px}
+          .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.btns button{flex:1 1 auto}
+          .fab{position:fixed;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));box-shadow:0 2px 8px #0004;padding:14px 18px;border-radius:30px}
+          pre{white-space:pre-wrap;background:var(--bg);padding:10px;border-radius:8px;border:1px solid var(--line);font:14px/1.5 Arial,sans-serif}
+          #modal{position:fixed;inset:0;background:#0007;display:none;align-items:flex-end;z-index:9}
+          #modal .sheet{background:var(--card);width:100%;max-height:92%;overflow:auto;border-radius:16px 16px 0 0;padding:14px 14px calc(14px + env(safe-area-inset-bottom,0px))}
+          </style>
+          </head>
+          <body>
+          <h1>🎓 कोचिंग फीस मैनेजर</h1>
+
+          <div class="card">
+            <div class="row">
+              <div><label>कोचिंग का नाम</label><input id="name"></div>
+              <div><label>फीस का माह</label><input id="month" placeholder="October 2026"></div>
+            </div>
+            <div class="row">
+              <div><label>आपकी UPI ID (QR के लिए)</label><input id="upi" placeholder="name@upi"></div>
+              <div><label>UPI पर दिखने वाला नाम</label><input id="upin"></div>
+            </div>
+            <div class="btns">
+              <button class="ok" onclick="sendAll()">📩 बाकी फीस वालों को SMS</button>
+              <button class="g" onclick="newMonth()">➡️ नया माह</button>
+              <button class="g" onclick="hist()">📚 पुराना रिकॉर्ड</button>
+            </div>
+          </div>
+
+          <input id="q" placeholder="🔍 नाम या बैच से खोजें" style="margin-bottom:10px">
+          <div id="list"></div>
+          <div class="card mut" id="sum"></div>
+          <p class="mut">डेटा सिर्फ इसी फोन में सेव रहता है।</p>
+
+          <button class="fab" onclick="edit()">+ विद्यार्थी</button>
+          <div id="modal"><div class="sheet" id="sheet"></div></div>
+
+          <script src="qrcode.js"></script>
+          <script>
+          var S={name:"",month:"",upi:"",upin:""},T=[],H=[];
+          function load(){try{S=Object.assign(S,JSON.parse(localStorage.getItem("cc_s")||"{}"));T=JSON.parse(localStorage.getItem("cc_t")||"[]");H=JSON.parse(localStorage.getItem("cc_h")||"[]")}catch(e){}}
+          function save(){try{localStorage.setItem("cc_s",JSON.stringify(S));localStorage.setItem("cc_t",JSON.stringify(T));localStorage.setItem("cc_h",JSON.stringify(H))}catch(e){}}
+          var $=function(i){return document.getElementById(i)};
+          var n=function(v){return Number(v)||0};
+          var inr=function(v){return "₹"+n(v).toLocaleString("en-IN")};
+          function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+          function today(){var d=new Date();return d.getFullYear()+"-"+("0"+(d.getMonth()+1)).slice(-2)+"-"+("0"+d.getDate()).slice(-2)}
+          function fd(d){if(!d)return "";var p=String(d).split("-");return p.length==3?p[2]+"/"+p[1]+"/"+p[0]:d}
+          function nextMonth(s){var N=["January","February","March","April","May","June","July","August","September","October","November","December"],x=/^\s*([A-Za-z]+)\s+(\d{4})\s*$/.exec(s||"");if(!x)return s;var i=N.findIndex(function(m){return m.toLowerCase()==x[1].toLowerCase()});if(i<0)return s;var y=+x[2];i++;if(i>11){i=0;y++}return N[i]+" "+y}
+          function ph(t){return String(t.phone||"").replace(/[^\d+]/g,"")}
+          function calc(t){return{tot:Math.max(n(t.fee)+n(t.due),0)}}
+          function upiUrl(amt,t){return "upi://pay?pa="+encodeURIComponent(S.upi.trim()).replace(/%40/g,"@")+"&pn="+encodeURIComponent(S.upin||S.name||"Coaching")+(amt>0?"&am="+amt:"")+"&cu=INR&tn="+encodeURIComponent((S.month||"Fee")+" "+t.name)}
+          function msg(t){var c=calc(t),p=n(t.pamt),b=c.tot-p;
+            return (S.name||"कोचिंग")+"\n"+S.month+" की फीस\nविद्यार्थी: "+t.name+(t.cls?" ("+t.cls+")":"")+
+            "\nमासिक फीस: "+inr(t.fee)+(n(t.due)?"\nपिछला बकाया: "+inr(t.due):"")+
+            "\nकुल फीस: "+inr(c.tot)+
+            (p?"\nप्राप्त: "+inr(p)+(t.pdate?" ("+fd(t.pdate)+")":"")+"\n"+(b>0?"बाकी देय: "+inr(b):"फीस जमा ✅"):"\nकुल देय: "+inr(c.tot))+
+            (b>0&&S.upi?"\nUPI: "+S.upi:"")+(b>0?"\nकृपया फीस जमा करें। धन्यवाद।":"\nधन्यवाद।")}
+          function render(){
+            var q=($("q").value||"").toLowerCase(),h="",g=0,r=0;
+            T.forEach(function(t,i){var c=calc(t),p=n(t.pamt),b=c.tot-p;g+=c.tot;r+=p;
+              if(q&&(String(t.name).toLowerCase().indexOf(q)<0&&String(t.cls||"").toLowerCase().indexOf(q)<0))return;
+              var st=p>0?(b<=0?'<span style="color:var(--ok)">✅ फीस जमा '+inr(p)+(t.pdate?' ('+fd(t.pdate)+')':'')+'</span>':'<span style="color:#b45309">🟡 '+inr(p)+' मिला, बाकी '+inr(b)+'</span>'):'<span style="color:#c5221f">⏳ बाकी '+inr(c.tot)+'</span>';
+              h+='<div class="card"><b>'+esc(t.name)+'</b> <span class="mut">'+esc(t.cls||"")+'</span>'+
+              (t.since?'<div class="mut">प्रवेश: '+fd(t.since)+'</div>':'')+
+              '<div class="mut">फीस '+inr(t.fee)+(n(t.due)?' + बकाया '+inr(t.due):'')+'</div>'+
+              '<div class="tot">कुल: '+inr(c.tot)+'</div><div>'+st+'</div>'+
+              '<div class="btns"><button class="ok" onclick="sms('+i+')">📩 SMS</button>'+
+              '<button onclick="wa('+i+')">💬 WhatsApp</button>'+
+              '<button onclick="pay('+i+')">💰 फीस जमा</button>'+
+              '<button class="g" onclick="rcpt('+i+')">🧾 रसीद/QR</button>'+
+              '<button class="g" onclick="edit('+i+')">✏️</button></div></div>'});
+            $("list").innerHTML=h||'<div class="card mut">'+(T.length?'कोई विद्यार्थी नहीं मिला।':'अभी कोई विद्यार्थी नहीं। नीचे "+ विद्यार्थी" दबाएँ।')+'</div>';
+            $("sum").innerHTML="विद्यार्थी: <b>"+T.length+"</b> | कुल फीस: <b>"+inr(g)+"</b><br>जमा: <b style='color:var(--ok)'>"+inr(r)+"</b> | बाकी: <b style='color:#c5221f'>"+inr(Math.max(g-r,0))+"</b>";
+          }
+          var NATIVE=!!(window.Android&&Android.sendSms);
+          function sms(i){var t=T[i];if(!ph(t)){alert("पहले फोन नंबर भरें (✏️ दबाएँ)");return}
+            if(NATIVE){Android.sendSms(ph(t),msg(t))}else{location.href="sms:"+ph(t)+"?body="+encodeURIComponent(msg(t))}}
+          function wa(i){var t=T[i],p=ph(t).replace(/\D/g,"");if(!p){alert("पहले फोन नंबर भरें (✏️ दबाएँ)");return}if(p.length==10)p="91"+p;location.href="https://wa.me/"+p+"?text="+encodeURIComponent(msg(t))}
+          function sendAll(){if(!NATIVE){alert("ये सुविधा सिर्फ Android app में है");return}
+            var L=T.filter(function(t){return ph(t)&&calc(t).tot-n(t.pamt)>0});
+            if(!L.length){alert("बाकी फीस वाले किसी विद्यार्थी का फोन नंबर नहीं भरा है");return}
+            if(confirm("बाकी फीस वाले "+L.length+" विद्यार्थियों के अभिभावकों को SMS भेजें?")){L.forEach(function(t){Android.sendSms(ph(t),msg(t))})}}
+          function cp(i){var m=msg(T[i]);if(window.Android&&Android.share){Android.share(m)}else if(navigator.share){navigator.share({text:m}).catch(function(){})}}
+          function show(h){$("sheet").innerHTML=h;$("modal").style.display="flex"}
+          function close_(){$("modal").style.display="none"}
+          $("modal").addEventListener("click",function(e){if(e.target==this)close_()});
+          function f(id,l,v,ty){return "<label>"+l+"</label><input id='f_"+id+"' type='"+ty+"' "+(ty=="number"?"inputmode='decimal' ":"")+"value=\""+esc(v)+"\">"}
+          function edit(i){var t=i==null?{name:"",phone:"",cls:"",since:"",fee:"",due:""}:T[i];
+            show("<h3>"+(i==null?"नया विद्यार्थी":"विद्यार्थी बदलें")+"</h3>"+
+            f("name","विद्यार्थी का नाम",t.name,"text")+f("phone","अभिभावक का मोबाइल (SMS के लिए)",t.phone,"tel")+f("cls","क्लास / बैच",t.cls||"","text")+f("since","प्रवेश की तारीख",t.since||"","date")+
+            f("fee","मासिक फीस (₹)",t.fee,"number")+
+            f("due","पिछला बकाया (₹)",t.due,"number")+
+            "<div class='btns'><button class='ok' onclick='sv("+(i==null?"null":i)+")'>सेव</button><button class='g' onclick='close_()'>रद्द</button>"+(i==null?"":"<button class='r' onclick='del("+i+")'>हटाएँ</button>")+"</div>")}
+          function sv(i){var t=i==null?{}:Object.assign({},T[i]);["name","phone","cls","since","fee","due"].forEach(function(k){t[k]=$("f_"+k).value.trim()});
+            if(!t.name){alert("नाम भरें");return}
+            if(i==null)T.push(t);else T[i]=t;save();close_();render()}
+          function del(i){if(confirm("इस विद्यार्थी को हटाएँ?")){T.splice(i,1);save();close_();render()}}
+          function pay(i){var t=T[i],c=calc(t);
+            show("<h3>💰 फीस जमा — "+esc(t.name)+"</h3><div class='mut'>कुल फीस: "+inr(c.tot)+"</div>"+
+            f("p_amt","मिली रकम (₹)",n(t.pamt)||c.tot,"number")+f("p_date","जमा की तारीख",t.pdate||today(),"date")+
+            "<div class='btns'><button class='ok' onclick='psv("+i+")'>✅ सेव</button><button class='r' onclick='pclr("+i+")'>जमा हटाएँ</button><button class='g' onclick='close_()'>बंद</button></div>")}
+          function psv(i){var t=T[i];t.pamt=n($("f_p_amt").value);t.pdate=$("f_p_date").value;save();close_();render()}
+          function pclr(i){var t=T[i];t.pamt="";t.pdate="";save();close_();render()}
+          function newMonth(){if(!T.length)return;
+            if(!confirm("इस माह ("+S.month+") का रिकॉर्ड 'पुराना रिकॉर्ड' में सेव होगा और बाकी फीस अगले माह के बकाया में जुड़ जाएगी। ठीक है?"))return;
+            T.forEach(function(t){var c=calc(t);
+              H.push({m:S.month,name:t.name,cls:t.cls,fee:n(t.fee),due:n(t.due),tot:c.tot,pamt:n(t.pamt),pdate:t.pdate||""});
+              var b=Math.max(c.tot-n(t.pamt),0);
+              t.due=b?String(b):"";t.pamt="";t.pdate=""});
+            S.month=nextMonth(S.month);$("month").value=S.month;save();render()}
+          function hist(){show('<h3>📚 पुराना रिकॉर्ड</h3><input id="hq" placeholder="नाम / बैच से खोजें" oninput="hl()"><div id="hl"></div><div class="btns"><button class="g" onclick="close_()">बंद</button></div>');hl()}
+          function hl(){var q=($("hq").value||"").toLowerCase(),M=[],o={};
+            H.forEach(function(x){if(q&&String(x.name).toLowerCase().indexOf(q)<0&&String(x.cls||"").toLowerCase().indexOf(q)<0)return;if(!o[x.m]){o[x.m]=[];M.push(x.m)}o[x.m].push(x)});
+            var h="";M.slice().reverse().forEach(function(m){var a=o[m],s=0,p=0;a.forEach(function(x){s+=x.tot;p+=x.pamt});
+              h+='<div class="card"><b>'+esc(m||"(माह नहीं)")+'</b> <span class="mut">फीस '+inr(s)+' | जमा '+inr(p)+'</span>';
+              a.forEach(function(x){var b=x.tot-x.pamt;h+='<div class="mut">'+esc(x.name)+(x.cls?' ('+esc(x.cls)+')':'')+': '+inr(x.tot)+' — '+(x.pamt>0?(b<=0?'✅ ':'🟡 ')+inr(x.pamt)+(x.pdate?' ('+fd(x.pdate)+')':'')+(b>0?', बाकी '+inr(b):''):'⏳ बाकी')+'</div>'});
+              h+='</div>'});
+            $("hl").innerHTML=h||'<div class="mut" style="margin-top:8px">अभी कोई पुराना रिकॉर्ड नहीं</div>'}
+          var LIMG="";
+          function rc(t){var c=calc(t),p=n(t.pamt),b=c.tot-p,W=640,rows=[["मासिक फीस",inr(t.fee)]];
+            if(n(t.due))rows.push(["पिछला बकाया",inr(t.due)]);
+            rows.push(["कुल फीस",inr(c.tot),1]);
+            if(p)rows.push(["प्राप्त"+(t.pdate?" ("+fd(t.pdate)+")":""),inr(p)]);
+            rows.push([b>0?"बाकी देय":"फीस जमा ✅",b>0?inr(b):"",1]);
+            var qr=null;if(b>0&&S.upi&&typeof qrcode!=="undefined"){try{qr=qrcode(0,"M");qr.addData(upiUrl(b,t));qr.make()}catch(e){qr=null}}
+            var H0=150,RH=44,cv=document.createElement("canvas");cv.width=W;cv.height=H0+rows.length*RH+(qr?360:40);
+            var x=cv.getContext("2d");x.fillStyle="#fff";x.fillRect(0,0,W,cv.height);x.fillStyle="#1F4E78";x.fillRect(0,0,W,90);
+            x.fillStyle="#fff";x.font="bold 30px Arial,sans-serif";x.textAlign="center";x.fillText(S.name||"फीस रसीद",W/2,42);x.font="20px Arial,sans-serif";x.fillText(S.month+" — फीस रसीद",W/2,72);
+            x.textAlign="left";x.fillStyle="#000";x.font="bold 24px Arial,sans-serif";x.fillText("विद्यार्थी: "+t.name+(t.cls?" ("+t.cls+")":""),24,125);
+            var y=H0;rows.forEach(function(r){x.font=(r[2]?"bold ":"")+"21px Arial,sans-serif";x.fillStyle=r[2]?"#1F4E78":"#222";x.textAlign="left";x.fillText(r[0],24,y+30);x.textAlign="right";x.fillText(r[1],W-24,y+30);x.fillStyle="#ddd";x.fillRect(24,y+RH-4,W-48,1);y+=RH});
+            if(qr){var m=qr.getModuleCount(),cs=Math.floor(260/m),sz=cs*m,ox=(W-sz)/2,oy=y+20;x.fillStyle="#fff";x.fillRect(ox-12,oy-12,sz+24,sz+24);x.fillStyle="#000";
+              for(var a=0;a<m;a++)for(var d=0;d<m;d++)if(qr.isDark(a,d))x.fillRect(ox+d*cs,oy+a*cs,cs,cs);
+              x.textAlign="center";x.fillStyle="#188038";x.font="bold 22px Arial,sans-serif";x.fillText("UPI से "+inr(b)+" जमा करें",W/2,oy+sz+44);x.fillStyle="#444";x.font="18px Arial,sans-serif";x.fillText(S.upi,W/2,oy+sz+72)}
+            return cv}
+          function rcpt(i){var t=T[i];try{LIMG=rc(t).toDataURL("image/png")}catch(e){LIMG=""}
+            show("<h3>रसीद — "+esc(t.name)+"</h3>"+(LIMG?"<img src='"+LIMG+"' style='width:100%;border:1px solid var(--line);border-radius:8px'>":"<pre>"+esc(msg(t))+"</pre>")+
+            (S.upi?"":"<div class='mut'>QR के लिए ऊपर अपनी UPI ID भरें।</div>")+
+            "<div class='btns'><button class='ok' onclick='shimg("+i+")'>🖼️ फोटो शेयर (WhatsApp आदि)</button><button onclick='sms("+i+")'>📩 SMS</button><button class='g' onclick='cp("+i+")'>📋 टेक्स्ट शेयर</button><button class='g' onclick='close_()'>बंद</button></div>")}
+          function shimg(i){if(!LIMG){alert("फोटो नहीं बन पाई");return}var b=LIMG.split(",")[1];
+            if(window.Android&&Android.shareImage){Android.shareImage(b,msg(T[i]))}
+            else{var a=document.createElement("a");a.href=LIMG;a.download="receipt.png";document.body.appendChild(a);a.click();a.remove()}}
+          load();
+          ["name","month","upi","upin"].forEach(function(k){$(k).value=S[k]||"";$(k).addEventListener("input",function(){S[k]=this.value;save()})});
+          $("q").addEventListener("input",render);
+          render();
+          </script>
+          </body>
+          </html>
+          END_OF_FILE
+          npm pack qrcode-generator@1.4.4
+          tar xzf qrcode-generator-1.4.4.tgz
+          cp package/qrcode.js app/src/main/assets/qrcode.js
+          rm -rf package qrcode-generator-1.4.4.tgz
+          ls -la app/src/main/assets
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CoachingFee-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
