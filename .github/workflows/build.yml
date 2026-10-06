@@ -31,8 +31,8 @@ jobs:
                   applicationId "com.ajay.coachingfee"
                   minSdk 21
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "1.1"
               }
               compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
           }
@@ -102,10 +102,59 @@ jobs:
                   wv.loadUrl("file:///android_asset/index.html");
               }
 
+              private Uri saveImg(String b64) throws Exception {
+                  byte[] data = Base64.decode(b64, Base64.DEFAULT);
+                  ContentValues v = new ContentValues();
+                  v.put(MediaStore.Images.Media.DISPLAY_NAME, "receipt_" + System.currentTimeMillis() + ".png");
+                  v.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+                  v.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CoachingFee");
+                  Uri u = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+                  OutputStream os = getContentResolver().openOutputStream(u);
+                  os.write(data);
+                  os.close();
+                  return u;
+              }
+
+              private void waImage(String b64, String text, String phone) {
+                  if (Build.VERSION.SDK_INT < 29) {
+                      Toast.makeText(this, "फोटो शेयर के लिए Android 10 या नया चाहिए", Toast.LENGTH_LONG).show();
+                      return;
+                  }
+                  try {
+                      Uri u = saveImg(b64);
+                      String[] pk = new String[]{"com.whatsapp", "com.whatsapp.w4b"};
+                      for (String p : pk) {
+                          try {
+                              Intent i = new Intent(Intent.ACTION_SEND);
+                              i.setType("image/png");
+                              i.setPackage(p);
+                              i.putExtra(Intent.EXTRA_STREAM, u);
+                              i.putExtra(Intent.EXTRA_TEXT, text);
+                              if (phone != null && phone.length() > 0) i.putExtra("jid", phone + "@s.whatsapp.net");
+                              i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                              startActivity(i);
+                              return;
+                          } catch (Exception e) { }
+                      }
+                      Intent i = new Intent(Intent.ACTION_SEND);
+                      i.setType("image/png");
+                      i.putExtra(Intent.EXTRA_STREAM, u);
+                      i.putExtra(Intent.EXTRA_TEXT, text);
+                      i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                      startActivity(Intent.createChooser(i, "रसीद भेजें"));
+                  } catch (Exception e) {
+                      Toast.makeText(this, "फोटो शेयर नहीं हो पाई", Toast.LENGTH_LONG).show();
+                  }
+              }
+
               class Bridge {
                   @JavascriptInterface
                   public void sendSms(final String phone, final String text) {
                       runOnUiThread(new Runnable() { public void run() { doSend(phone, text); } });
+                  }
+                  @JavascriptInterface
+                  public void shareImageWa(final String b64, final String text, final String phone) {
+                      runOnUiThread(new Runnable() { public void run() { waImage(b64, text, phone); } });
                   }
                   @JavascriptInterface
                   public void shareImage(final String b64, final String text) {
@@ -115,15 +164,7 @@ jobs:
                               return;
                           }
                           try {
-                              byte[] data = Base64.decode(b64, Base64.DEFAULT);
-                              ContentValues v = new ContentValues();
-                              v.put(MediaStore.Images.Media.DISPLAY_NAME, "receipt_" + System.currentTimeMillis() + ".png");
-                              v.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
-                              v.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CoachingFee");
-                              Uri u = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
-                              OutputStream os = getContentResolver().openOutputStream(u);
-                              os.write(data);
-                              os.close();
+                              Uri u = saveImg(b64);
                               Intent i = new Intent(Intent.ACTION_SEND);
                               i.setType("image/png");
                               i.putExtra(Intent.EXTRA_STREAM, u);
@@ -197,6 +238,7 @@ jobs:
           button.ok{background:var(--ok)}button.r{background:#c5221f}
           .tot{font-size:20px;font-weight:bold;color:var(--pri)}
           .mut{color:var(--mut);font-size:13px}
+          summary{cursor:pointer;margin-top:8px}
           .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.btns button{flex:1 1 auto}
           .fab{position:fixed;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));box-shadow:0 2px 8px #0004;padding:14px 18px;border-radius:30px}
           pre{white-space:pre-wrap;background:var(--bg);padding:10px;border-radius:8px;border:1px solid var(--line);font:14px/1.5 Arial,sans-serif}
@@ -216,8 +258,21 @@ jobs:
               <div><label>आपकी UPI ID (QR के लिए)</label><input id="upi" placeholder="name@upi"></div>
               <div><label>UPI पर दिखने वाला नाम</label><input id="upin"></div>
             </div>
+            <details>
+              <summary class="mut">🏦 भुगतान विवरण (बैंक खाता)</summary>
+              <div class="row">
+                <div><label>बैंक का नाम</label><input id="bank"></div>
+                <div><label>खाताधारक का नाम</label><input id="ahn"></div>
+              </div>
+              <div class="row">
+                <div><label>खाता नंबर</label><input id="acc" inputmode="numeric"></div>
+                <div><label>IFSC कोड</label><input id="ifsc"></div>
+              </div>
+              <label style="display:flex;gap:8px;align-items:center;color:var(--tx);font-size:14px;margin-top:10px"><input type="checkbox" id="pd" style="width:auto"> संदेश और रसीद फोटो में भुगतान विवरण जोड़ें</label>
+            </details>
             <div class="btns">
               <button class="ok" onclick="sendAll()">📩 बाकी फीस वालों को SMS</button>
+              <button class="ok" onclick="waAll()">💬 बाकी फीस वालों को WhatsApp (फोटो)</button>
               <button class="g" onclick="newMonth()">➡️ नया माह</button>
               <button class="g" onclick="hist()">📚 पुराना रिकॉर्ड</button>
             </div>
@@ -233,7 +288,7 @@ jobs:
 
           <script src="qrcode.js"></script>
           <script>
-          var S={name:"",month:"",upi:"",upin:""},T=[],H=[];
+          var S={name:"",month:"",upi:"",upin:"",bank:"",ahn:"",acc:"",ifsc:"",pd:true},T=[],H=[];
           function load(){try{S=Object.assign(S,JSON.parse(localStorage.getItem("cc_s")||"{}"));T=JSON.parse(localStorage.getItem("cc_t")||"[]");H=JSON.parse(localStorage.getItem("cc_h")||"[]")}catch(e){}}
           function save(){try{localStorage.setItem("cc_s",JSON.stringify(S));localStorage.setItem("cc_t",JSON.stringify(T));localStorage.setItem("cc_h",JSON.stringify(H))}catch(e){}}
           var $=function(i){return document.getElementById(i)};
@@ -245,13 +300,14 @@ jobs:
           function nextMonth(s){var N=["January","February","March","April","May","June","July","August","September","October","November","December"],x=/^\s*([A-Za-z]+)\s+(\d{4})\s*$/.exec(s||"");if(!x)return s;var i=N.findIndex(function(m){return m.toLowerCase()==x[1].toLowerCase()});if(i<0)return s;var y=+x[2];i++;if(i>11){i=0;y++}return N[i]+" "+y}
           function ph(t){return String(t.phone||"").replace(/[^\d+]/g,"")}
           function calc(t){return{tot:Math.max(n(t.fee)+n(t.due),0)}}
+          function pl(){if(S.pd===false)return[];var a=[];if(S.bank)a.push("बैंक: "+S.bank);if(S.ahn)a.push("खाताधारक: "+S.ahn);if(S.acc)a.push("खाता नंबर: "+S.acc);if(S.ifsc)a.push("IFSC: "+S.ifsc);return a}
           function upiUrl(amt,t){return "upi://pay?pa="+encodeURIComponent(S.upi.trim()).replace(/%40/g,"@")+"&pn="+encodeURIComponent(S.upin||S.name||"Coaching")+(amt>0?"&am="+amt:"")+"&cu=INR&tn="+encodeURIComponent((S.month||"Fee")+" "+t.name)}
           function msg(t){var c=calc(t),p=n(t.pamt),b=c.tot-p;
             return (S.name||"कोचिंग")+"\n"+S.month+" की फीस\nविद्यार्थी: "+t.name+(t.cls?" ("+t.cls+")":"")+
             "\nमासिक फीस: "+inr(t.fee)+(n(t.due)?"\nपिछला बकाया: "+inr(t.due):"")+
             "\nकुल फीस: "+inr(c.tot)+
             (p?"\nप्राप्त: "+inr(p)+(t.pdate?" ("+fd(t.pdate)+")":"")+"\n"+(b>0?"बाकी देय: "+inr(b):"फीस जमा ✅"):"\nकुल देय: "+inr(c.tot))+
-            (b>0&&S.upi?"\nUPI: "+S.upi:"")+(b>0?"\nकृपया फीस जमा करें। धन्यवाद।":"\nधन्यवाद।")}
+            (b>0&&S.upi?"\nUPI: "+S.upi:"")+(b>0&&pl().length?"\n\nभुगतान विवरण:\n"+pl().join("\n"):"")+(b>0?"\n\nकृपया फीस जमा करें। धन्यवाद।":"\nधन्यवाद।")}
           function render(){
             var q=($("q").value||"").toLowerCase(),h="",g=0,r=0;
             T.forEach(function(t,i){var c=calc(t),p=n(t.pamt),b=c.tot-p;g+=c.tot;r+=p;
@@ -273,10 +329,25 @@ jobs:
           function sms(i){var t=T[i];if(!ph(t)){alert("पहले फोन नंबर भरें (✏️ दबाएँ)");return}
             if(NATIVE){Android.sendSms(ph(t),msg(t))}else{location.href="sms:"+ph(t)+"?body="+encodeURIComponent(msg(t))}}
           function wa(i){var t=T[i],p=ph(t).replace(/\D/g,"");if(!p){alert("पहले फोन नंबर भरें (✏️ दबाएँ)");return}if(p.length==10)p="91"+p;location.href="https://wa.me/"+p+"?text="+encodeURIComponent(msg(t))}
+          function pend(){var a=[];T.forEach(function(t,i){if(calc(t).tot-n(t.pamt)>0)a.push(i)});return a}
           function sendAll(){if(!NATIVE){alert("ये सुविधा सिर्फ Android app में है");return}
             var L=T.filter(function(t){return ph(t)&&calc(t).tot-n(t.pamt)>0});
             if(!L.length){alert("बाकी फीस वाले किसी विद्यार्थी का फोन नंबर नहीं भरा है");return}
             if(confirm("बाकी फीस वाले "+L.length+" विद्यार्थियों के अभिभावकों को SMS भेजें?")){L.forEach(function(t){Android.sendSms(ph(t),msg(t))})}}
+          var WS={};
+          function waAll(){if(!NATIVE){alert("ये सुविधा सिर्फ Android app में है");return}
+            if(!pend().length){alert("किसी की फीस बाकी नहीं है");return}
+            WS={};
+            show('<h3>💬 बाकी फीस — WhatsApp</h3><div class="mut">हर नाम के आगे बटन दबाएँ। उस अभिभावक की WhatsApp चैट रसीद-फोटो और संदेश के साथ खुलेगी। बस Send दबाकर वापस आएँ।</div><div id="wl"></div><div class="btns"><button class="g" onclick="close_()">बंद</button></div>');wl()}
+          function wl(){var h="";pend().forEach(function(i){var t=T[i],b=calc(t).tot-n(t.pamt);
+              h+='<div class="card"><b>'+esc(t.name)+'</b> <span class="mut">'+esc(t.cls||"")+' — बाकी '+inr(b)+'</span>'+
+              (ph(t)?'<div class="btns"><button class="'+(WS[i]?'g':'ok')+'" onclick="waOne('+i+')">'+(WS[i]?'✔ भेजा — दोबारा भेजें':'💬 रसीद फोटो भेजें')+'</button></div>':'<div class="mut" style="color:#c5221f">फोन नंबर नहीं भरा</div>')+'</div>'});
+            if($("wl"))$("wl").innerHTML=h||'<div class="mut">सबकी फीस जमा है ✅</div>'}
+          function waOne(i){var t=T[i],p=ph(t).replace(/\D/g,"");if(!p){alert("पहले फोन नंबर भरें (✏️ दबाएँ)");return}if(p.length==10)p="91"+p;
+            var d;try{d=rc(t).toDataURL("image/png")}catch(e){alert("फोटो नहीं बन पाई");return}
+            WS[i]=1;
+            if(NATIVE&&Android.shareImageWa){Android.shareImageWa(d.split(",")[1],msg(t),p)}else{LIMG=d;shimg(i)}
+            if($("wl"))wl()}
           function cp(i){var m=msg(T[i]);if(window.Android&&Android.share){Android.share(m)}else if(navigator.share){navigator.share({text:m}).catch(function(){})}}
           function show(h){$("sheet").innerHTML=h;$("modal").style.display="flex"}
           function close_(){$("modal").style.display="none"}
@@ -284,7 +355,7 @@ jobs:
           function f(id,l,v,ty){return "<label>"+l+"</label><input id='f_"+id+"' type='"+ty+"' "+(ty=="number"?"inputmode='decimal' ":"")+"value=\""+esc(v)+"\">"}
           function edit(i){var t=i==null?{name:"",phone:"",cls:"",since:"",fee:"",due:""}:T[i];
             show("<h3>"+(i==null?"नया विद्यार्थी":"विद्यार्थी बदलें")+"</h3>"+
-            f("name","विद्यार्थी का नाम",t.name,"text")+f("phone","अभिभावक का मोबाइल (SMS के लिए)",t.phone,"tel")+f("cls","क्लास / बैच",t.cls||"","text")+f("since","प्रवेश की तारीख",t.since||"","date")+
+            f("name","विद्यार्थी का नाम",t.name,"text")+f("phone","अभिभावक का मोबाइल (SMS/WhatsApp के लिए)",t.phone,"tel")+f("cls","क्लास / बैच",t.cls||"","text")+f("since","प्रवेश की तारीख",t.since||"","date")+
             f("fee","मासिक फीस (₹)",t.fee,"number")+
             f("due","पिछला बकाया (₹)",t.due,"number")+
             "<div class='btns'><button class='ok' onclick='sv("+(i==null?"null":i)+")'>सेव</button><button class='g' onclick='close_()'>रद्द</button>"+(i==null?"":"<button class='r' onclick='del("+i+")'>हटाएँ</button>")+"</div>")}
@@ -320,24 +391,29 @@ jobs:
             if(p)rows.push(["प्राप्त"+(t.pdate?" ("+fd(t.pdate)+")":""),inr(p)]);
             rows.push([b>0?"बाकी देय":"फीस जमा ✅",b>0?inr(b):"",1]);
             var qr=null;if(b>0&&S.upi&&typeof qrcode!=="undefined"){try{qr=qrcode(0,"M");qr.addData(upiUrl(b,t));qr.make()}catch(e){qr=null}}
-            var H0=150,RH=44,cv=document.createElement("canvas");cv.width=W;cv.height=H0+rows.length*RH+(qr?360:40);
+            var P=b>0?pl():[];
+            var H0=150,RH=44,cv=document.createElement("canvas");cv.width=W;cv.height=H0+rows.length*RH+(qr?380:40)+(P.length?60+P.length*30:0);
             var x=cv.getContext("2d");x.fillStyle="#fff";x.fillRect(0,0,W,cv.height);x.fillStyle="#1F4E78";x.fillRect(0,0,W,90);
             x.fillStyle="#fff";x.font="bold 30px Arial,sans-serif";x.textAlign="center";x.fillText(S.name||"फीस रसीद",W/2,42);x.font="20px Arial,sans-serif";x.fillText(S.month+" — फीस रसीद",W/2,72);
             x.textAlign="left";x.fillStyle="#000";x.font="bold 24px Arial,sans-serif";x.fillText("विद्यार्थी: "+t.name+(t.cls?" ("+t.cls+")":""),24,125);
             var y=H0;rows.forEach(function(r){x.font=(r[2]?"bold ":"")+"21px Arial,sans-serif";x.fillStyle=r[2]?"#1F4E78":"#222";x.textAlign="left";x.fillText(r[0],24,y+30);x.textAlign="right";x.fillText(r[1],W-24,y+30);x.fillStyle="#ddd";x.fillRect(24,y+RH-4,W-48,1);y+=RH});
             if(qr){var m=qr.getModuleCount(),cs=Math.floor(260/m),sz=cs*m,ox=(W-sz)/2,oy=y+20;x.fillStyle="#fff";x.fillRect(ox-12,oy-12,sz+24,sz+24);x.fillStyle="#000";
               for(var a=0;a<m;a++)for(var d=0;d<m;d++)if(qr.isDark(a,d))x.fillRect(ox+d*cs,oy+a*cs,cs,cs);
-              x.textAlign="center";x.fillStyle="#188038";x.font="bold 22px Arial,sans-serif";x.fillText("UPI से "+inr(b)+" जमा करें",W/2,oy+sz+44);x.fillStyle="#444";x.font="18px Arial,sans-serif";x.fillText(S.upi,W/2,oy+sz+72)}
+              x.textAlign="center";x.fillStyle="#188038";x.font="bold 22px Arial,sans-serif";x.fillText("UPI से "+inr(b)+" जमा करें",W/2,oy+sz+44);x.fillStyle="#444";x.font="18px Arial,sans-serif";x.fillText(S.upi,W/2,oy+sz+72);y=oy+sz+72}
+            if(P.length){y+=40;x.fillStyle="#ddd";x.fillRect(24,y-22,W-48,1);x.textAlign="left";x.fillStyle="#1F4E78";x.font="bold 21px Arial,sans-serif";x.fillText("🏦 भुगतान विवरण",24,y+8);
+              x.fillStyle="#222";x.font="20px Arial,sans-serif";P.forEach(function(l,k){x.fillText(l,24,y+42+k*30)})}
             return cv}
           function rcpt(i){var t=T[i];try{LIMG=rc(t).toDataURL("image/png")}catch(e){LIMG=""}
             show("<h3>रसीद — "+esc(t.name)+"</h3>"+(LIMG?"<img src='"+LIMG+"' style='width:100%;border:1px solid var(--line);border-radius:8px'>":"<pre>"+esc(msg(t))+"</pre>")+
             (S.upi?"":"<div class='mut'>QR के लिए ऊपर अपनी UPI ID भरें।</div>")+
-            "<div class='btns'><button class='ok' onclick='shimg("+i+")'>🖼️ फोटो शेयर (WhatsApp आदि)</button><button onclick='sms("+i+")'>📩 SMS</button><button class='g' onclick='cp("+i+")'>📋 टेक्स्ट शेयर</button><button class='g' onclick='close_()'>बंद</button></div>")}
+            "<div class='btns'><button class='ok' onclick='waOne("+i+")'>💬 WhatsApp फोटो</button><button onclick='shimg("+i+")'>🖼️ फोटो शेयर (और ऐप)</button><button onclick='sms("+i+")'>📩 SMS</button><button class='g' onclick='cp("+i+")'>📋 टेक्स्ट शेयर</button><button class='g' onclick='close_()'>बंद</button></div>")}
           function shimg(i){if(!LIMG){alert("फोटो नहीं बन पाई");return}var b=LIMG.split(",")[1];
             if(window.Android&&Android.shareImage){Android.shareImage(b,msg(T[i]))}
             else{var a=document.createElement("a");a.href=LIMG;a.download="receipt.png";document.body.appendChild(a);a.click();a.remove()}}
           load();
-          ["name","month","upi","upin"].forEach(function(k){$(k).value=S[k]||"";$(k).addEventListener("input",function(){S[k]=this.value;save()})});
+          ["name","month","upi","upin","bank","ahn","acc","ifsc"].forEach(function(k){$(k).value=S[k]||"";$(k).addEventListener("input",function(){S[k]=this.value;save()})});
+          $("pd").checked=S.pd!==false;
+          $("pd").addEventListener("change",function(){S.pd=this.checked;save()});
           $("q").addEventListener("input",render);
           render();
           </script>
